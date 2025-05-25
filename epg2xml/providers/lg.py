@@ -8,18 +8,17 @@ try:
 except ImportError:
     _temp_log_lg = logging.getLogger("LG_PROVIDER_IMPORT_ERROR_FALLBACK")
     _temp_log_lg.error("epg2xml.providers 모듈을 찾을 수 없습니다. epg2xml 패키지가 올바르게 설치되었는지 확인하세요.")
-    # GitHub Actions 환경에서는 이 오류가 발생하면 안 됩니다.
-    # 아래는 로컬 테스트 등에서 최소한의 실행을 위한 임시 정의일 뿐입니다.
     class EPGProvider:
         def __init__(self, cfg): 
             self.cfg = cfg
             import requests 
             self.req = requests.Session() 
-            self.req.headers["User-Agent"] = "epg2xml_lg_temp_ua" # 임시 User-Agent
+            self.req.headers["User-Agent"] = "epg2xml_lg_temp_ua"
             _temp_log_lg.info("임시 EPGProvider 사용 중 - self.req가 requests.Session()으로 임시 초기화됨.")
         def get_json(self, url, **kwargs): 
-            _temp_log_lg.error("EPGProvider.get_json 호출 실패 - 임시 구현")
-            return None
+            # 이 임시 get_json은 실제 요청을 보내지 않으므로, 실제 테스트에서는 의미 없음
+            _temp_log_lg.error(f"임시 EPGProvider.get_json 호출됨 (url: {url}). 실제 데이터 못 가져옴.")
+            return None # 실제로는 API 호출 후 JSON 반환해야 함
     class EPGProgram:
         def __init__(self, channelid): self.channelid = channelid; self.title=None; self.stime=None
     def no_endtime(func): return func
@@ -27,77 +26,80 @@ except ImportError:
 else:
     log = logging.getLogger(__name__.rsplit(".", maxsplit=1)[-1].upper())
 
-# 시청 등급 코드 매핑
 G_CODE = {"0": 0, "1": 7, "2": 12, "3": 15, "4": 19, "": 0} 
-
-# 프로그램 카테고리 코드 매핑
 P_CATE: Dict[str, Any] = {
     "00": "영화", "01": "스포츠/취미", "02": "만화", "03": "드라마", "04": "교양/다큐",
     "05": "스포츠/취미", "06": "교육", "07": "어린이", "08": "연예/오락",
     "09": "공연/음악", "10": "게임", "11": "다큐", "12": "뉴스/정보",
-    "13": "라이프", "15": "홈쇼핑", "16": "경제/부동산", "31": "기타",
-    "": "기타" 
+    "13": "라이프", "15": "홈쇼핑", "16": "경제/부동산", "31": "기타", "": "기타" 
 }
 
 class LG(EPGProvider):
     """EPGProvider for LG U+ (LGUplus)"""
 
     def __init__(self, cfg: dict):
-        # === 1. 가장 먼저 super().__init__(cfg) 호출 ===
-        # 이것이 EPGProvider의 초기화 로직(self.req, self.get_json 등 설정)을 실행합니다.
+        log.info(f"LG Provider __init__ 시작 (cfg type: {type(cfg)})")
         try:
             super().__init__(cfg) 
             log.info("LG Provider: super().__init__(cfg) 호출 성공.")
         except Exception as e_super_init:
-            # 만약 super().__init__ 자체에서 오류가 발생한다면, 여기서 잡힙니다.
             log.critical(f"LG Provider: super().__init__(cfg) 호출 중 심각한 예외 발생: {e_super_init}", exc_info=True)
-            raise # 이 오류는 Provider를 사용할 수 없게 만드므로 다시 발생시킴
+            raise 
 
-        # === 2. self.req 및 self.get_json 존재 여부 명시적 확인 ===
-        # super().__init__이 정상적으로 호출되었다면 이 속성들이 존재해야 합니다.
+        # self.req 및 self.get_json 존재 여부 명시적 확인 (이전 로그에서 이 부분은 통과했음)
         if not hasattr(self, 'req') or self.req is None:
-            log.critical("LG Provider __init__ 오류: self.req (requests.Session)가 super().__init__ 후에도 초기화되지 않았습니다! EPGProvider의 __init__ 구현 또는 상속 문제를 확인해야 합니다.")
-            # 이 오류는 매우 심각하며, Provider가 HTTP 요청을 보낼 수 없음을 의미합니다.
-            # epg2xml 프레임워크가 이 Provider를 제대로 로드하지 못했을 가능성이 큽니다.
+            log.critical("LG Provider __init__ 내부 오류: self.req가 super().__init__ 후에도 없습니다.")
             raise AttributeError("'LG' object (after super init) still has no attribute 'req' or req is None.")
-        else:
-            log.debug(f"LG Provider: self.req 초기화 확인 완료. User-Agent: {self.req.headers.get('User-Agent', 'N/A')}")
-        
         if not hasattr(self, 'get_json') or not callable(self.get_json):
-             log.critical("LG Provider __init__ 오류: self 객체에 get_json 메소드가 없습니다! EPGProvider 상속 문제를 확인하세요.")
+             log.critical("LG Provider __init__ 내부 오류: self.get_json 메소드가 없습니다.")
              raise AttributeError("'LG' object has no attribute 'get_json' or it's not callable")
-        else:
-            log.debug("LG Provider: self.get_json 메소드 확인 완료.")
+        
+        log.debug(f"LG Provider __init__: self.req 확인됨, User-Agent: {self.req.headers.get('User-Agent', 'N/A')}")
+        log.debug("LG Provider __init__: self.get_json 메소드 확인됨.")
 
-        # === 3. 나머지 초기화 ===
         self.svc_url = "https://www.lguplus.com/uhdc/fo/prdv/chnlgid/v1/tv-schedule-list"
         self.channel_genre_map: Dict[str, str] = {}
         self.genre_map_initialized = False
         log.info(f"LG Provider 인스턴스 생성 및 초기화 완료. 서비스 URL: {self.svc_url}")
 
-    # ... (이하 _fetch_api_data, _initialize_channel_genre_map, get_svc_channels, get_programs, __epgs_of_day 메소드는 이전 답변의 최종 수정안과 동일하게 유지) ...
-    # (이전 답변에서 제공한 _fetch_api_data, _initialize_channel_genre_map, get_svc_channels, 
-    #  get_programs, __epgs_of_day 함수 코드를 여기에 그대로 붙여넣으시면 됩니다.)
-    # (길이가 매우 길어지므로 여기서는 생략합니다. 이전 답변의 lg.py 전체 코드를 참고해주세요.)
+    def _fetch_api_data(self, params: dict, err_msg_prefix: str, method: str = "GET") -> Any:
+        log.debug(f"LG: _fetch_api_data 호출됨. 목적: {err_msg_prefix}")
+        
+        # === self.get_json 존재 여부 및 타입 재확인 (호출 직전) ===
+        if hasattr(self, 'get_json') and callable(self.get_json):
+            log.debug(f"LG: _fetch_api_data 내에서 self.get_json 확인됨 (타입: {type(self.get_json)}). 정상 호출 시도.")
+            # 정상적인 경우: EPGProvider로부터 상속받은 get_json 메소드 사용
+            try:
+                data = self.get_json(self.svc_url, method=method, params=params, err_msg=f"{err_msg_prefix} (API호출)")
+                log.debug(f"LG: API 응답 수신 (self.get_json 사용) (첫 200자): {str(data)[:200] if data else 'None'}")
+                return data
+            except Exception as e:
+                log.error(f"LG: self.get_json API 호출 중 예외 발생 ({err_msg_prefix}): {e}", exc_info=True)
+                return None
+        else:
+            # === 비정상적인 경우: self.get_json이 없거나 호출 불가능할 때 (이전 로그의 오류 상황) ===
+            log.error(f"LG: _fetch_api_data 내에서 self.get_json을 찾을 수 없거나 호출할 수 없습니다! (타입: {type(getattr(self, 'get_json', None))}). EPGProvider.get_json 직접 호출 시도 (임시 방편).")
+            # 부모 클래스의 get_json을 직접 호출 시도 (매우 비표준적인 방법, 디버깅 목적)
+            # 이 코드가 실행된다는 것 자체가 epg2xml 프레임워크 또는 상속에 문제가 있음을 의미
+            if hasattr(EPGProvider, 'get_json') and callable(EPGProvider.get_json):
+                try:
+                    # EPGProvider.get_json은 첫 번째 인자로 self(인스턴스)를 받아야 함
+                    data = EPGProvider.get_json(self, self.svc_url, method=method, params=params, err_msg=f"{err_msg_prefix} (EPGProvider.get_json 직접 호출)")
+                    log.debug(f"LG: API 응답 수신 (EPGProvider.get_json 직접 사용) (첫 200자): {str(data)[:200] if data else 'None'}")
+                    return data
+                except Exception as e_direct_call:
+                    log.error(f"LG: EPGProvider.get_json 직접 API 호출 중 예외 발생 ({err_msg_prefix}): {e_direct_call}", exc_info=True)
+                    return None
+            else:
+                log.critical(f"LG: EPGProvider 클래스에도 get_json 메소드가 없거나 호출 불가능합니다. epg2xml 패키지 자체를 확인해야 합니다.")
+                return None
+
+
+    # ... (이하 _initialize_channel_genre_map, get_svc_channels, get_programs, __epgs_of_day 메소드는 이전 답변의 최종 수정안과 동일하게 유지) ...
+    # (이전 답변에서 제공한 해당 함수들의 전체 코드를 여기에 그대로 붙여넣으시면 됩니다.)
+    # (길이가 매우 길어지므로 여기서는 생략합니다.)
 
     # 아래는 이전 답변의 함수들을 그대로 가져온 것입니다. (내용 동일)
-    def _fetch_api_data(self, params: dict, err_msg_prefix: str, method: str = "GET") -> Any:
-        if not hasattr(self, 'req') or self.req is None: 
-            log.error(f"LG: API 호출 불가 ({err_msg_prefix}) - self.req가 초기화되지 않았습니다.")
-            return None
-        if not hasattr(self, 'get_json') or not callable(self.get_json):
-            log.error(f"LG: API 호출 불가 ({err_msg_prefix}) - self.get_json 메소드가 없습니다.")
-            return None
-        
-        log.debug(f"LG: API 호출 시도. URL: {self.svc_url}, Method: {method}, Params: {params}")
-        try:
-            data = self.get_json(self.svc_url, method=method, params=params, err_msg=f"{err_msg_prefix} (API호출)")
-            log.debug(f"LG: API 응답 수신 (첫 200자): {str(data)[:200] if data else 'None'}")
-            return data
-        except Exception as e:
-            log.error(f"LG: API 호출 중 예외 발생 ({err_msg_prefix}): {e}", exc_info=True)
-            return None
-
     def _initialize_channel_genre_map(self, api_data_for_genres: dict) -> None:
         if self.genre_map_initialized: return
         if not isinstance(api_data_for_genres, dict):
