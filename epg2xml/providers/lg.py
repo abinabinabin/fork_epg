@@ -169,16 +169,26 @@ class LG(EPGProvider):
 
     # epg2xml/providers/lg.py 수정 제안
 
+   # epg2xml/providers/lg.py 수정
+
     @no_endtime
-    def get_programs(self) -> None: # **kwargs 제거
-        # self.req_channels 와 self.cfg["FETCH_LIMIT"] 사용
-        for ch_idx, channel_obj in enumerate(self.req_channels):
-            log.info(f"LG: 채널 EPG 수집 중 [{ch_idx+1}/{len(self.req_channels)}]: {channel_obj.name} ({channel_obj.id})")
-            # FETCH_LIMIT에 따라 날짜 반복
-            for day_offset in range(int(self.cfg.get("FETCH_LIMIT", 2))): # GLOBAL 설정 또는 LG 개별 설정의 FETCH_LIMIT 사용
+    def get_programs(self) -> None: # **kwargs 제거됨
+        log.debug(f"LG: get_programs 시작. 요청된 채널 수 (self.req_channels): {len(self.req_channels)}")
+        if not self.req_channels:
+            log.warning("LG: get_programs - 요청된 채널 (self.req_channels)이 없습니다. epg2xml.json 설정을 확인하세요.")
+            return
+
+        for ch_idx, channel_obj in enumerate(self.req_channels): # 반복 변수는 channel_obj
+            log.info(f"LG: 채널 EPG 수집 중 [{ch_idx+1}/{len(self.req_channels)}]: {channel_obj.name} ({channel_obj.id}), ServiceId: {channel_obj.svcid}")
+            
+            fetch_limit = int(self.cfg.get("FETCH_LIMIT", 2))
+            log.debug(f"LG: {channel_obj.name} - FETCH_LIMIT: {fetch_limit}일")
+
+            for day_offset in range(fetch_limit):
                 current_day = date.today() + timedelta(days=day_offset)
                 
-                api_channel_id = channel_obj.svcid
+                # channel.svcid 대신 channel_obj.svcid 사용
+                api_channel_id = channel_obj.svcid 
                 if not api_channel_id:
                     log.warning(f"LG: 채널 객체에 svcid 없음 (채널: {channel_obj.name}, xmltv_id: {channel_obj.id}). 건너뜁니다.")
                     continue
@@ -186,7 +196,6 @@ class LG(EPGProvider):
                 log.debug(f"LG: 채널 '{channel_obj.name}'(API ID: {api_channel_id}, XMLTV ID: {channel_obj.id})의 '{current_day.strftime('%Y-%m-%d')}' EPG 수집 시도...")
                 
                 params_for_epg = {"BAS_DT": current_day.strftime("%Y%m%d"), "CHNL_TYPE": "1", "CHNL_ID": api_channel_id}
-                # _fetch_api_data 메소드는 이전 답변에서 수정한 버전을 사용한다고 가정
                 data = self._fetch_api_data(params_for_epg, f"채널 '{channel_obj.name}({api_channel_id})' EPG ({current_day.strftime('%Y-%m-%d')})")
 
                 if not data or not data.get("brdCntTvSchIDtoList"):
@@ -201,10 +210,13 @@ class LG(EPGProvider):
                 try:
                     # __epgs_of_day 메소드는 channel_obj.id (xmltv id)를 사용
                     epgs_for_day = self.__epgs_of_day(channel_obj.id, program_raw_data_list)
-                    channel_obj.programs.extend(epgs_for_day)
+                    channel_obj.programs.extend(epgs_for_day) # channel_obj.programs에 추가
                     log.debug(f"LG: 채널 '{channel_obj.name}({channel_obj.id})'의 '{current_day.strftime('%Y-%m-%d')}' EPG {len(epgs_for_day)}개 추가 완료.")
                 except Exception as e:
                     log.error(f"LG: 프로그램 파싱 중 예외 (채널: {channel_obj.name}, 날짜: {current_day}): {e}", exc_info=True)
+                    log.debug(f"LG: get_programs 완료. 총 {len(self.req_channels)}개 채널 처리 시도.")
+
+        
 
         api_channel_id = channel.svcid #
         if not api_channel_id: #
