@@ -1,9 +1,9 @@
 """
 LG U+ EPG provider for epg2xml
-rev. 2025-05-26 – Cloudflare warm-up 포함
+rev. 2025-05-26 – cloudscraper 지원·CF warm-up 포함
 """
 
-import logging, time
+import logging, time, os, importlib, requests
 from datetime import date, datetime, timedelta
 from typing import List, Dict, Any
 
@@ -11,7 +11,7 @@ from epg2xml.providers import EPGProgram, EPGProvider, no_endtime
 
 log = logging.getLogger(__name__.rsplit(".", 1)[-1].upper())
 
-# ────────────── 공통 상수 ────────────────────────────────
+# ────────────────────── 상수 ──────────────────────
 G_CODE = {"0": 0, "1": 7, "2": 12, "3": 15, "4": 19, "": 0}
 P_CATE: Dict[str, Any] = {
     "00": "영화", "01": "스포츠/취미", "02": "만화", "03": "드라마", "04": "교양/다큐",
@@ -19,25 +19,31 @@ P_CATE: Dict[str, Any] = {
     "09": "공연/음악", "10": "게임", "11": "다큐", "12": "뉴스/정보",
     "13": "라이프", "15": "홈쇼핑", "16": "경제/부동산", "31": "기타", "": "기타"
 }
-# ────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────
 
 
 class LG(EPGProvider):
     """LG U+ IPTV EPG provider"""
 
-    # ── 1. 초기화 ──────────────────────────────────────
+    # ── 1. 초기화 ───────────────────────────────────
     def __init__(self, cfg: dict):
-        super().__init__(cfg)                # 부모가 Session 생성
+        super().__init__(cfg)
 
-        session = (getattr(self, "req", None) or
-                   getattr(self, "sess", None) or
-                   getattr(self, "session", None))
-        if session is None:                  # 드물게 부모 구현이 달라진 경우
-            import requests
+        # cloudscraper 우선, 없으면 requests
+        try:
+            cloudscraper = importlib.import_module("cloudscraper")
+            session = cloudscraper.create_scraper(
+                browser={"custom": "Chrome/123.0 Android 14"},
+                delay=10,
+            )
+            log.info("LG  cloudscraper 세션으로 초기화")
+        except ModuleNotFoundError:
             session = requests.Session()
-        self.req = session                   # 이름 통일
+            log.warning("LG  cloudscraper 미설치 → plain requests 사용")
 
-        # Unity WebRequest 지문 그대로 주입 (Cloudflare bypass)
+        self.req = session
+
+        # Unity WebRequest 지문
         self.req.headers.update({
             "User-Agent":      "UnityPlayer/2021.3.18f1 (UnityWebRequest/1.0)",
             "X-Unity-Version": "2021.3.18f1",
@@ -47,7 +53,15 @@ class LG(EPGProvider):
             "Referer":         "https://www.lguplus.com/",
         })
 
-        # 공식 API 엔드포인트
+        # (선택) 브라우저에서 가져온 cf_clearance 쿠키 주입
+        for k in ("CF_CLEARANCE", "CF_BM"):
+            v = os.getenv(f"LG_{k}")
+            if v:
+                self.req.cookies.set(
+                    "cf_clearance" if k == "CF_CLEARANCE" else "__cf_bm",
+                    v, domain=".lguplus.com"
+                )
+
         self.url_channels = ("https://www.lguplus.com/uhdc/fo/prdv/chnlgid/v1/"
                              "tv-channel-list")
         self.url_schedule = ("https://www.lguplus.com/uhdc/fo/prdv/chnlgid/v1/"
@@ -56,7 +70,7 @@ class LG(EPGProvider):
         self.channel_genre_map: Dict[str, str] = {}
         self.genre_map_initialized = False
 
-    # ── 2. 공통 GET 요청 헬퍼 ──────────────────────────
+    # ── 2. 공통 GET 헬퍼 ────────────────────────────
     def _fetch_api_json(self, url: str, params: dict, why: str) -> dict | None:
         try:
             r = self.req.get(url, params=params, timeout=10)
@@ -69,18 +83,19 @@ class LG(EPGProvider):
                 log.debug("LG 응답이 HTML… Cloudflare 차단 의심")
             return None
 
-    # ── 3. Cloudflare 워밍-업 (쿠키 얻기) ────────────────
+    # ── 3. Cloudflare 쿠키 워밍-업 ───────────────────
     def _warm_up_cf(self) -> None:
         today = date.today().strftime("%Y%m%d")
-        dummy_params = {
-            "brdCntrTvChnlBrdDt": today,
-            "urcBrdCntrTvChnlId": "5",   # SBS 채널(존재하는 임의 ID)
-            "urcBrdCntrTvChnlGnreCd": ""
-        }
-        self._fetch_api_json(self.url_schedule, dummy_params, "warm-up")
-        time.sleep(1)                      # 쿠키 쓰기 지연 방지
+        self._fetch_api_json(
+            self.url_schedule,
+            {"brdCntrTvChnlBrdDt": today,
+             "urcBrdCntrTvChnlId": "5",
+             "urcBrdCntrTvChnlGnreCd": ""},
+            "warm-up"
+        )
+        time.sleep(1)
 
-    # ── 4. 채널-장르 맵 초기화 ─────────────────────────
+    # ── 4. 장르 맵 초기화 ───────────────────────────
     def _initialize_channel_genre_map(self, data: dict) -> None:
         for g in data.get("brdGnreDtoList", []):
             if isinstance(g, dict):
@@ -89,14 +104,11 @@ class LG(EPGProvider):
                     self.channel_genre_map[str(cd)] = str(nm)
         self.genre_map_initialized = True
 
-    # ── 5. 채널 목록 수집 ─────────────────────────────
+    # ── 5. 채널 목록 수집 ───────────────────────────
     def get_svc_channels(self) -> List[dict]:
         today = date.today().strftime("%Y%m%d")
 
-        # 1) Cloudflare warm-up
-        self._warm_up_cf()
-
-        # 2) 실제 채널-목록 호출
+        self._warm_up_cf()  # CF 통과
         data = self._fetch_api_json(
             self.url_channels,
             {"BAS_DT": today, "CHNL_TYPE": "1"},
@@ -104,7 +116,7 @@ class LG(EPGProvider):
         )
         svc_channels: list[dict] = []
         if not data:
-            log.warning("LG 채널 목록 응답이 없습니다.")
+            log.warning("LG 채널 목록 응답 없음")
             return svc_channels
 
         if not self.genre_map_initialized:
@@ -130,11 +142,11 @@ class LG(EPGProvider):
         log.info(f"LG 채널 {len(svc_channels)}개 수집 완료")
         return svc_channels
 
-    # ── 6. EPG 수집 ──────────────────────────────────
+    # ── 6. EPG 수집 ─────────────────────────────────
     @no_endtime
     def get_programs(self) -> None:
         if not self.req_channels:
-            log.warning("LG 요청 채널이 비어 있습니다.")
+            log.warning("LG 요청 채널 없음")
             return
 
         fetch_limit = int(self.cfg.get("FETCH_LIMIT", 2))
@@ -143,22 +155,21 @@ class LG(EPGProvider):
                 day = date.today() + timedelta(days=d)
                 data = self._fetch_api_json(
                     self.url_schedule,
-                    {
-                        "BAS_DT":   day.strftime("%Y%m%d"),
-                        "CHNL_TYPE":"1",
-                        "CHNL_ID":  ch.svcid
-                    },
+                    {"BAS_DT": day.strftime("%Y%m%d"),
+                     "CHNL_TYPE": "1",
+                     "CHNL_ID": ch.svcid},
                     f"{ch.name}/{day}"
                 )
                 if not data:
                     continue
-                epg_list = data.get("brdCntTvSchIDtoList", [])
-                ch.programs.extend(self.__epgs_of_day(ch.id, epg_list))
+                ch.programs.extend(
+                    self.__epgs_of_day(ch.id, data.get("brdCntTvSchIDtoList", []))
+                )
 
-    # ── 7. 하루치 프로그램 → EPGProgram 변환 ───────────
-    def __epgs_of_day(self, xmltv_id: str, raw_list: list) -> List[EPGProgram]:
-        epgs: list[EPGProgram] = []
-        for p in raw_list:
+    # ── 7. 프로그램 → EPGProgram ────────────────────
+    def __epgs_of_day(self, xmltv_id: str, raw: list) -> List[EPGProgram]:
+        epgs = []
+        for p in raw:
             if not isinstance(p, dict):
                 continue
             e = EPGProgram(xmltv_id)
@@ -181,9 +192,9 @@ class LG(EPGProvider):
             if p.get("silaBrdYn") == "Y": extras.append("수화")
             if extras: e.extras = " ".join(extras)
 
-            cat_cd = str(p.get("urcBrdCntrTvSchdGnreCd", ""))
-            if cat_cd in P_CATE: e.categories = [P_CATE[cat_cd]]
-            elif cat_cd:         e.categories = [f"코드:{cat_cd}"]
+            cd = str(p.get("urcBrdCntrTvSchdGnreCd", ""))
+            if cd in P_CATE: e.categories = [P_CATE[cd]]
+            elif cd:         e.categories = [f"코드:{cd}"]
 
             epgs.append(e)
         return epgs
