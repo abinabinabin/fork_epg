@@ -25,17 +25,23 @@ P_CATE: Dict[str, Any] = {
 class LG(EPGProvider):
     """LG U+ IPTV EPG provider"""
 
-    # ── 1. 초기화 ──────────────────────────────────────
     def __init__(self, cfg: dict):
-        super().__init__(cfg)          # self.req = requests.Session()
+        super().__init__(cfg)          # 부모에서 세션을 만듦
 
-        # LG 공식 API 엔드포인트
-        self.url_channels = ("https://www.lguplus.com/uhdc/fo/prdv/chnlgid/v1/"
-                             "tv-channel-list")
-        self.url_schedule = ("https://www.lguplus.com/uhdc/fo/prdv/chnlgid/v1/"
-                             "tv-schedule-list")
+        # ── ① 부모가 만든 세션 객체 찾기 ─────────────────
+        session = (
+            getattr(self, "req",  None) or   # 일부 버전
+            getattr(self, "sess", None) or   # 최신 v2.5.x
+            getattr(self, "session", None)   # 예전 v2.4.x
+        )
+        if session is None:
+            import requests
+            session = requests.Session()
 
-        # Unity 지문을 그대로 세션 기본 헤더에 주입
+        # 속성 이름 통일
+        self.req = session
+
+        # ── ② 세션 기본 헤더 주입 (한 번만) ───────────────
         self.req.headers.update({
             "User-Agent":      "UnityPlayer/2021.3.18f1 (UnityWebRequest/1.0)",
             "X-Unity-Version": "2021.3.18f1",
@@ -45,8 +51,15 @@ class LG(EPGProvider):
             "Referer":         "https://www.lguplus.com/",
         })
 
+        # 나머지 필드
+        self.url_channels = ("https://www.lguplus.com/uhdc/fo/prdv/chnlgid/v1/"
+                             "tv-channel-list")
+        self.url_schedule = ("https://www.lguplus.com/uhdc/fo/prdv/chnlgid/v1/"
+                             "tv-schedule-list")
+
         self.channel_genre_map: Dict[str, str] = {}
         self.genre_map_initialized = False
+
 
     # ── 2. 공통 요청 헬퍼 ──────────────────────────────
     def _fetch_api_json(self, url: str, params: dict, why: str) -> dict | None:
