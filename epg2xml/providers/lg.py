@@ -75,34 +75,58 @@ class LG(EPGProvider):
 
     # epg2xml/providers/lg.py 의 _fetch_api_data 메소드 수정 시도 예시
 
-   # epg2xml/providers/lg.py 의 _fetch_api_data 메소드 수정 제안
+   
+
+    
 
     def _fetch_api_data(self, params: dict, err_msg_prefix: str, method: str = "GET") -> Any:
         log.debug(f"LG: _fetch_api_data 호출됨. 목적: {err_msg_prefix}. URL: {self.svc_url}, Params: {params}")
 
-        # 일반적인 최신 브라우저의 User-Agent 및 Referer 추가
+        # UnityWebRequest와 유사하거나 일반적인 브라우저가 보낼만한 헤더들로 구성
+        # User-Agent는 다양한 최신 브라우저 값을 시도해볼 수 있습니다.
+        # Unity의 User-Agent는 "UnityPlayer/..." 형태일 수 있습니다. (정확한 값은 Unity에서 확인 필요)
         custom_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36", # 최신 Chrome User-Agent
-            "Accept": "application/json, text/javascript, */*; q=0.01", # jQuery AJAX 요청과 유사하게
-            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Referer": "https://www.lguplus.com/support/online/guide/tv/channel-guide", # 실제 채널 가이드 페이지 Referer
-            "X-Requested-With": "XMLHttpRequest" # AJAX 요청임을 명시
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            # "User-Agent": "UnityPlayer/2022.3.10f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)", # 매우 일반적인 Unity User-Agent 예시 (버전은 다를 수 있음)
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7", # 한국어 우선 설정
+            "Accept-Encoding": "gzip, deflate, br", # 서버가 gzip 압축을 지원하므로 요청 (requests는 자동 처리)
+            "Connection": "keep-alive",
+            # "Referer": "https://www.lguplus.com/", # LG U+ 메인 페이지 또는 채널 가이드 페이지 Referer
+            "Referer": "https://www.lguplus.com/support/online/guide/tv/channel-guide", # 이전 제안 Referer
+            "DNT": "1", # Do Not Track
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors", # 또는 "no-cors"
+            "Sec-Fetch-Site": "same-origin", # 또는 "cross-site"
+            "TE": "trailers", # HTTP/2 관련, 없어도 무방할 수 있음
+            # "X-Requested-With": "XMLHttpRequest", # AJAX 요청처럼
         }
-        
+        # 참고: access-control-allow-headers에 나열된 x- 접두사 헤더들은 대부분
+        # 서버가 클라이언트(브라우저)에게 "이런 요청 헤더들을 보내도 된다"고 알려주는 것이지,
+        # 클라이언트가 반드시 보내야 하는 헤더는 아닐 수 있습니다.
+
+        # self.sess는 EPGProvider에서 생성된 requests.Session 객체입니다.
+        # 이 세션에 기본 헤더가 이미 설정되어 있을 수 있으며, 여기서 제공하는 헤더로 덮어쓰거나 추가됩니다.
+        # epg2xml의 EPGProvider는 UA라는 변수로 User-Agent를 설정하고, Referer도 클래스 변수로 가지고 있습니다.
+        # 여기서 custom_headers로 전달하면 self.request 내부에서 기존 세션 헤더와 병합/덮어쓰기 됩니다.
+
         try:
             # EPGProvider의 self.request는 **kwargs를 통해 headers를 전달받을 수 있음
             if method.upper() == "GET":
                 data = self.request(self.svc_url, method=method, params=params, headers=custom_headers)
-            else:
+            else: # POST 등
+                # API가 JSON body를 기대하면 json=params, form data를 기대하면 data=params
                 data = self.request(self.svc_url, method=method, data=params, headers=custom_headers)
 
             log.debug(f"LG: API 응답 수신 (self.request 사용) (첫 200자): {str(data)[:200] if data else 'None'}")
 
-            if not isinstance(data, (dict, list)):
+            if not isinstance(data, (dict, list)): # 응답이 JSON 객체 또는 배열인지 확인
                 log.error(f"LG: API 응답이 예상된 JSON 형식이 아님 ({err_msg_prefix}). 수신된 타입: {type(data)}. 응답 앞부분: {str(data)[:500]}")
-                if isinstance(data, str) and data.strip().lower().startswith("<!doctype html"):
-                    log.error("LG: 수신된 응답이 HTML 문서입니다. 웹 보안 시스템(예: Cloudflare)에 의해 차단되었을 수 있습니다.")
+                if isinstance(data, str) and ("<title>Just a moment...</title>" in data or "cloudflare" in data.lower()):
+                    log.error("LG: 수신된 응답이 HTML 문서이며, Cloudflare 보안 페이지로 보입니다. 설정된 헤더로 통과하지 못했습니다.")
                 return None
+            # 성공적으로 JSON을 받았다면
+            log.info(f"LG: 성공적으로 JSON 데이터를 수신했습니다 ({err_msg_prefix}).")
             return data
         except Exception as e:
             log.error(f"LG: self.request API 호출 중 예외 발생 ({err_msg_prefix}): {e}", exc_info=True)
