@@ -60,7 +60,7 @@ class LG(EPGProvider):
             raise AttributeError("'LG' object (after super init and assignment) still has no attribute 'req' or req is None.") #
 
         # self.get_json 메소드는 EPGProvider에 없으므로, 이 확인은 의미가 없거나 오류를 유발함.
-        # _fetch_api_data 메소드가 self.request를 사용하도록 수정되므로, 이 검사는 경고로 대체하거나 제거.
+        #  메소드가 self.request를 사용하도록 수정되므로, 이 검사는 경고로 대체하거나 제거.
         if not hasattr(self, 'request') or not callable(self.request): # EPGProvider는 self.request 메소드를 제공
              log.critical("LG Provider __init__ 내부 오류: self.request 메소드가 없습니다. EPGProvider.__init__ 확인 필요.") #
              raise AttributeError("'LG' object has no attribute 'request' or it's not callable") #
@@ -75,33 +75,34 @@ class LG(EPGProvider):
 
     # epg2xml/providers/lg.py 의 _fetch_api_data 메소드 수정 시도 예시
 
+   # epg2xml/providers/lg.py 의 _fetch_api_data 메소드 수정 제안
+
     def _fetch_api_data(self, params: dict, err_msg_prefix: str, method: str = "GET") -> Any:
         log.debug(f"LG: _fetch_api_data 호출됨. 목적: {err_msg_prefix}. URL: {self.svc_url}, Params: {params}")
 
-        # 시도해볼 수 있는 헤더 (UnityWebRequest의 기본 헤더나 일반 브라우저 헤더 참고)
+        # 일반적인 최신 브라우저의 User-Agent 및 Referer 추가
         custom_headers = {
-            # User-Agent를 UnityWebRequest 또는 일반 브라우저와 유사하게 변경 시도
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36", # 예시, 실제 브라우저 값 사용 권장
-            "Accept": "application/json, text/plain, */*", # API가 JSON을 반환하므로 JSON 우선
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36", # 최신 Chrome User-Agent
+            "Accept": "application/json, text/javascript, */*; q=0.01", # jQuery AJAX 요청과 유사하게
             "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-            # "X-Requested-With": "XMLHttpRequest" # AJAX 요청처럼 보이게 할 수도 있음
+            "Referer": "https://www.lguplus.com/support/online/guide/tv/channel-guide", # 실제 채널 가이드 페이지 Referer
+            "X-Requested-With": "XMLHttpRequest" # AJAX 요청임을 명시
         }
-        # 기존 세션 헤더에 임시로 추가하거나 덮어쓰는 대신, 요청 시에만 사용
         
         try:
+            # EPGProvider의 self.request는 **kwargs를 통해 headers를 전달받을 수 있음
             if method.upper() == "GET":
                 data = self.request(self.svc_url, method=method, params=params, headers=custom_headers)
-            else: # POST 등 다른 메소드의 경우, API 명세에 따라 data= 또는 json= 사용
-                data = self.request(self.svc_url, method=method, data=params, headers=custom_headers) # 만약 API가 JSON body를 기대하면 json=params
+            else:
+                data = self.request(self.svc_url, method=method, data=params, headers=custom_headers)
 
             log.debug(f"LG: API 응답 수신 (self.request 사용) (첫 200자): {str(data)[:200] if data else 'None'}")
 
-            if not isinstance(data, (dict, list)): # API 응답이 JSON 객체 또는 배열인지 확인
+            if not isinstance(data, (dict, list)):
                 log.error(f"LG: API 응답이 예상된 JSON 형식이 아님 ({err_msg_prefix}). 수신된 타입: {type(data)}. 응답 앞부분: {str(data)[:500]}")
-                # HTML 응답인지 확인 (Cloudflare 페이지인지)
                 if isinstance(data, str) and data.strip().lower().startswith("<!doctype html"):
                     log.error("LG: 수신된 응답이 HTML 문서입니다. 웹 보안 시스템(예: Cloudflare)에 의해 차단되었을 수 있습니다.")
-                return None # JSON이 아니면 None 반환 또는 예외 발생
+                return None
             return data
         except Exception as e:
             log.error(f"LG: self.request API 호출 중 예외 발생 ({err_msg_prefix}): {e}", exc_info=True)
