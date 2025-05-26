@@ -73,63 +73,65 @@ class LG(EPGProvider):
         self.genre_map_initialized = False #
         log.info(f"LG Provider 인스턴스 생성 및 초기화 완료. 서비스 URL: {self.svc_url}") #
 
-    # epg2xml/providers/lg.py 의 _fetch_api_data 메소드 수정 시도 예시
+     
 
-   
-
-    
+    # epg2xml/providers/lg.py 의 _fetch_api_data 메소드 수정안
 
     def _fetch_api_data(self, params: dict, err_msg_prefix: str, method: str = "GET") -> Any:
         log.debug(f"LG: _fetch_api_data 호출됨. 목적: {err_msg_prefix}. URL: {self.svc_url}, Params: {params}")
 
-        # UnityWebRequest와 유사하거나 일반적인 브라우저가 보낼만한 헤더들로 구성
-        # User-Agent는 다양한 최신 브라우저 값을 시도해볼 수 있습니다.
-        # Unity의 User-Agent는 "UnityPlayer/..." 형태일 수 있습니다. (정확한 값은 Unity에서 확인 필요)
+        # 제공된 Unity 요청 헤더 정보를 기반으로 헤더 구성
         custom_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-            # "User-Agent": "UnityPlayer/2022.3.10f1 (UnityWebRequest/1.0, libcurl/7.80.0-DEV)", # 매우 일반적인 Unity User-Agent 예시 (버전은 다를 수 있음)
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7", # 한국어 우선 설정
-            "Accept-Encoding": "gzip, deflate, br", # 서버가 gzip 압축을 지원하므로 요청 (requests는 자동 처리)
-            "Connection": "keep-alive",
-            # "Referer": "https://www.lguplus.com/", # LG U+ 메인 페이지 또는 채널 가이드 페이지 Referer
-            "Referer": "https://www.lguplus.com/support/online/guide/tv/channel-guide", # 이전 제안 Referer
-            "DNT": "1", # Do Not Track
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors", # 또는 "no-cors"
-            "Sec-Fetch-Site": "same-origin", # 또는 "cross-site"
-            "TE": "trailers", # HTTP/2 관련, 없어도 무방할 수 있음
-            # "X-Requested-With": "XMLHttpRequest", # AJAX 요청처럼
+            "User-Agent": "UnityPlayer/2021.3.18f1 (UnityWebRequest/1.0, libcurl/7.84.0-DEV)", # Unity User-Agent
+            "X-Unity-Version": "2021.3.18f1", # Unity 버전 헤더
+            "Accept": "*/*", # Unity Accept 헤더
+            "Accept-Language": "ko-KR,en-US;q=0.8", # Unity Accept-Language
+            "Accept-Encoding": "gzip, deflate", # requests가 자동으로 처리하지만 명시적으로 포함
+            # "Connection": "Keep-Alive", # requests.Session이 자동으로 관리
+            "Referer": "https://www.lguplus.com/", # 일반적인 Referer 또는 채널 가이드 페이지
+            # "DNT": "1", # Do Not Track (선택 사항)
+            # "Sec-Fetch-Dest": "empty",
+            # "Sec-Fetch-Mode": "cors",
+            # "Sec-Fetch-Site": "same-origin", # 또는 "cross-site"
+            # 참고: 제공된 요청 예시에는 없었지만, 웹사이트 탐색 시 흔히 포함되는 헤더들
         }
-        # 참고: access-control-allow-headers에 나열된 x- 접두사 헤더들은 대부분
-        # 서버가 클라이언트(브라우저)에게 "이런 요청 헤더들을 보내도 된다"고 알려주는 것이지,
-        # 클라이언트가 반드시 보내야 하는 헤더는 아닐 수 있습니다.
-
+        
         # self.sess는 EPGProvider에서 생성된 requests.Session 객체입니다.
-        # 이 세션에 기본 헤더가 이미 설정되어 있을 수 있으며, 여기서 제공하는 헤더로 덮어쓰거나 추가됩니다.
-        # epg2xml의 EPGProvider는 UA라는 변수로 User-Agent를 설정하고, Referer도 클래스 변수로 가지고 있습니다.
-        # 여기서 custom_headers로 전달하면 self.request 내부에서 기존 세션 헤더와 병합/덮어쓰기 됩니다.
+        # 이 세션은 쿠키를 자동으로 관리합니다. 
+        # Cloudflare가 Set-Cookie로 __cf_bm 등을 보내면, 다음 요청에 자동으로 포함될 것입니다.
 
         try:
             # EPGProvider의 self.request는 **kwargs를 통해 headers를 전달받을 수 있음
             if method.upper() == "GET":
+                # self.sess.headers.update(custom_headers) # 세션에 직접 헤더를 업데이트하는 대신, 요청 시마다 전달
                 data = self.request(self.svc_url, method=method, params=params, headers=custom_headers)
             else: # POST 등
-                # API가 JSON body를 기대하면 json=params, form data를 기대하면 data=params
                 data = self.request(self.svc_url, method=method, data=params, headers=custom_headers)
 
             log.debug(f"LG: API 응답 수신 (self.request 사용) (첫 200자): {str(data)[:200] if data else 'None'}")
 
+            # 응답 헤더에서 Cloudflare 쿠키 설정 여부 확인 (디버깅용)
+            # 실제 data가 requests.Response 객체가 아니므로, 이 방식은 EPGProvider의 __request 내부에서 처리해야 함
+            # if hasattr(data, 'cookies'): # data가 Response 객체일 경우
+            #    log.debug(f"LG: 응답으로부터 받은 쿠키: {data.cookies.get_dict()}")
+            # log.debug(f"LG: 현재 세션 쿠키: {self.sess.cookies.get_dict()}")
+
+
             if not isinstance(data, (dict, list)): # 응답이 JSON 객체 또는 배열인지 확인
                 log.error(f"LG: API 응답이 예상된 JSON 형식이 아님 ({err_msg_prefix}). 수신된 타입: {type(data)}. 응답 앞부분: {str(data)[:500]}")
                 if isinstance(data, str) and ("<title>Just a moment...</title>" in data or "cloudflare" in data.lower()):
-                    log.error("LG: 수신된 응답이 HTML 문서이며, Cloudflare 보안 페이지로 보입니다. 설정된 헤더로 통과하지 못했습니다.")
+                    log.error("LG: 수신된 응답이 HTML 문서이며, Cloudflare 보안 페이지로 보입니다. 설정된 헤더 및 자동 쿠키 처리로 통과하지 못했습니다.")
+                    log.info(f"LG: 현재 세션 쿠키 상태 (Cloudflare 우회 실패 시점): {self.sess.cookies.get_dict()}")
                 return None
-            # 성공적으로 JSON을 받았다면
+            
             log.info(f"LG: 성공적으로 JSON 데이터를 수신했습니다 ({err_msg_prefix}).")
+            log.debug(f"LG: 현재 세션 쿠키 상태 (JSON 성공적 수신 후): {self.sess.cookies.get_dict()}")
             return data
         except Exception as e:
             log.error(f"LG: self.request API 호출 중 예외 발생 ({err_msg_prefix}): {e}", exc_info=True)
+            # 예외 발생 시 세션 쿠키 상태 로깅 (디버깅용)
+            if hasattr(self, 'sess') and hasattr(self.sess, 'cookies'):
+                 log.error(f"LG: 예외 발생 시점 세션 쿠키: {self.sess.cookies.get_dict()}")
             return None
 
     # ... (이하 _initialize_channel_genre_map, get_svc_channels, get_programs, __epgs_of_day 메소드는 기존 코드 유지) ...
