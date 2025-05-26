@@ -73,26 +73,38 @@ class LG(EPGProvider):
         self.genre_map_initialized = False #
         log.info(f"LG Provider 인스턴스 생성 및 초기화 완료. 서비스 URL: {self.svc_url}") #
 
+    # epg2xml/providers/lg.py 의 _fetch_api_data 메소드 수정 시도 예시
+
     def _fetch_api_data(self, params: dict, err_msg_prefix: str, method: str = "GET") -> Any:
-        log.debug(f"LG: _fetch_api_data 호출됨. 목적: {err_msg_prefix}. URL: {self.svc_url}, Params: {params}") #
+        log.debug(f"LG: _fetch_api_data 호출됨. 목적: {err_msg_prefix}. URL: {self.svc_url}, Params: {params}")
+
+        # 시도해볼 수 있는 헤더 (UnityWebRequest의 기본 헤더나 일반 브라우저 헤더 참고)
+        custom_headers = {
+            # User-Agent를 UnityWebRequest 또는 일반 브라우저와 유사하게 변경 시도
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36", # 예시, 실제 브라우저 값 사용 권장
+            "Accept": "application/json, text/plain, */*", # API가 JSON을 반환하므로 JSON 우선
+            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+            # "X-Requested-With": "XMLHttpRequest" # AJAX 요청처럼 보이게 할 수도 있음
+        }
+        # 기존 세션 헤더에 임시로 추가하거나 덮어쓰는 대신, 요청 시에만 사용
         
         try:
-            # EPGProvider로부터 상속받은 self.request 메소드 사용
-            # self.request는 내부적으로 JSON 파싱 시도
             if method.upper() == "GET":
-                data = self.request(self.svc_url, method=method, params=params) # GET 요청 시 params 사용
-            else: # POST, PUT 등 다른 메소드의 경우
-                data = self.request(self.svc_url, method=method, data=params) # API가 form data를 기대하는 경우 data 사용, JSON body를 기대하면 json=params 사용
+                data = self.request(self.svc_url, method=method, params=params, headers=custom_headers)
+            else: # POST 등 다른 메소드의 경우, API 명세에 따라 data= 또는 json= 사용
+                data = self.request(self.svc_url, method=method, data=params, headers=custom_headers) # 만약 API가 JSON body를 기대하면 json=params
 
-            log.debug(f"LG: API 응답 수신 (self.request 사용) (첫 200자): {str(data)[:200] if data else 'None'}") #
+            log.debug(f"LG: API 응답 수신 (self.request 사용) (첫 200자): {str(data)[:200] if data else 'None'}")
 
-            # self.request가 반환한 데이터가 예상하는 dict 또는 list 형태인지 확인
-            if not isinstance(data, (dict, list)): # API 응답에 따라 list도 가능할 수 있음
-                log.error(f"LG: API 응답이 예상된 JSON 형식이 아님 ({err_msg_prefix}). 수신된 타입: {type(data)}. 응답: {str(data)[:500]}")
-                return None
+            if not isinstance(data, (dict, list)): # API 응답이 JSON 객체 또는 배열인지 확인
+                log.error(f"LG: API 응답이 예상된 JSON 형식이 아님 ({err_msg_prefix}). 수신된 타입: {type(data)}. 응답 앞부분: {str(data)[:500]}")
+                # HTML 응답인지 확인 (Cloudflare 페이지인지)
+                if isinstance(data, str) and data.strip().lower().startswith("<!doctype html"):
+                    log.error("LG: 수신된 응답이 HTML 문서입니다. 웹 보안 시스템(예: Cloudflare)에 의해 차단되었을 수 있습니다.")
+                return None # JSON이 아니면 None 반환 또는 예외 발생
             return data
         except Exception as e:
-            log.error(f"LG: self.request API 호출 중 예외 발생 ({err_msg_prefix}): {e}", exc_info=True) #
+            log.error(f"LG: self.request API 호출 중 예외 발생 ({err_msg_prefix}): {e}", exc_info=True)
             return None
 
     # ... (이하 _initialize_channel_genre_map, get_svc_channels, get_programs, __epgs_of_day 메소드는 기존 코드 유지) ...
